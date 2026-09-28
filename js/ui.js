@@ -1,6 +1,6 @@
 import { DOMAINS, OBJECTIVE_INDEX, EXAM_INFO, allObjectiveIds } from "./data/objectives.js";
 import { SAMPLE_SET } from "./data/sampleQuestions.js";
-import { loadUploadedSets, addUploadedSet, removeUploadedSet } from "./storage.js";
+import { loadUploadedSets, addUploadedSet, removeUploadedSet, loadSettings, saveSettings } from "./storage.js";
 import { validateQuestionSet } from "./validation.js";
 import {
   buildPool,
@@ -219,6 +219,40 @@ function refreshPoolCount() {
   if (Number(maxInput.value) > pool.length && pool.length > 0) maxInput.value = pool.length;
   el("#start-exam-btn").disabled = pool.length === 0;
   el("#pool-warning").style.display = pool.length === 0 ? "block" : "none";
+  persistSettings();
+}
+
+// ------------------------------------------------------------- Persistence
+
+// Remembers the setup screen (which sets/objectives are checked, exam options)
+// across reloads, since re-picking the same filters every time is tedious.
+function persistSettings() {
+  saveSettings({
+    enabledSetIds: [...state.enabledSetIds],
+    selectedObjectives: [...state.selectedObjectives],
+    numQuestions: Number(el("#num-questions").value) || 20,
+    timerEnabled: el("#timer-toggle").checked,
+    timerMinutes: Number(el("#timer-minutes").value) || 90,
+    shuffleQuestions: el("#shuffle-questions").checked,
+    shuffleOptions: el("#shuffle-options").checked,
+  });
+}
+
+function applySavedSettings(saved) {
+  if (!saved) return;
+  if (Array.isArray(saved.enabledSetIds)) {
+    const validIds = new Set(allSets().map((s) => s.id));
+    const restored = new Set(saved.enabledSetIds.filter((id) => validIds.has(id)));
+    state.enabledSetIds = restored.size > 0 ? restored : new Set(["builtin"]);
+  }
+  if (Array.isArray(saved.selectedObjectives)) {
+    state.selectedObjectives = new Set(saved.selectedObjectives.filter((id) => OBJECTIVE_INDEX[id]));
+  }
+  if (typeof saved.numQuestions === "number" && saved.numQuestions > 0) el("#num-questions").value = saved.numQuestions;
+  if (typeof saved.timerEnabled === "boolean") el("#timer-toggle").checked = saved.timerEnabled;
+  if (typeof saved.timerMinutes === "number" && saved.timerMinutes > 0) el("#timer-minutes").value = saved.timerMinutes;
+  if (typeof saved.shuffleQuestions === "boolean") el("#shuffle-questions").checked = saved.shuffleQuestions;
+  if (typeof saved.shuffleOptions === "boolean") el("#shuffle-options").checked = saved.shuffleOptions;
 }
 
 function applyStandardPreset() {
@@ -479,6 +513,75 @@ function renderResults(result) {
   el("#review-filter-incorrect").onchange = (e) => renderReviewDetails(result, e.target.checked);
 
   el("#retake-missed-btn").onclick = () => retakeMissed(result);
+  el("#export-json-btn").onclick = () => exportResultsJSON(result);
+  el("#export-csv-btn").onclick = () => exportResultsCSV(result);
+}
+
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function timestampForFilename() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function exportResultsJSON(result) {
+  const payload = {
+    examVersion: "SY0-701",
+    generatedAt: new Date().toISOString(),
+    summary: {
+      correct: result.correctCount,
+      total: result.total,
+      percent: result.percent,
+      estimatedScaledScore: result.scaled,
+      passed: result.passed,
+    },
+    perDomain: result.perDomain,
+    perObjective: result.perObjective,
+    questions: result.details.map((d) => ({
+      id: d.question.id,
+      domain: d.question.domain,
+      question: d.question.question,
+      options: d.question.options,
+      correctAnswerIndices: d.question.answer,
+      yourAnswerIndices: d.selected,
+      correct: d.correct,
+      explanation: d.question.explanation || "",
+    })),
+  };
+  downloadFile(`sy0-701-results-${timestampForFilename()}.json`, JSON.stringify(payload, null, 2), "application/json");
+}
+
+function csvEscape(value) {
+  const s = String(value ?? "");
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function exportResultsCSV(result) {
+  const header = ["id", "domain", "objective", "question", "options", "correct_answer", "your_answer", "result", "explanation"];
+  const rows = result.details.map((d) => {
+    const q = d.question;
+    return [
+      q.id,
+      q.domain,
+      OBJECTIVE_INDEX[q.domain]?.title || "",
+      q.question,
+      q.options.map((o, i) => `${i}: ${o}`).join(" | "),
+      q.answer.map((i) => q.options[i]).join(" | "),
+      d.selected.length ? d.selected.map((i) => q.options[i]).join(" | ") : "(no answer)",
+      d.correct ? "correct" : "incorrect",
+      q.explanation || "",
+    ];
+  });
+  const summaryLine = [`Score`, `${result.correctCount}/${result.total} (${result.percent}%)`, "", "", "", "", "", "", ""];
+  const csv = [header, summaryLine, ...rows].map((r) => r.map(csvEscape).join(",")).join("\r\n");
+  downloadFile(`sy0-701-results-${timestampForFilename()}.csv`, csv, "text/csv");
 }
 
 function renderReviewDetails(result, onlyIncorrect) {
@@ -537,6 +640,7 @@ function wireNav() {
   elAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => showPage(btn.dataset.page));
   });
+  el("#back-to-setup-btn").addEventListener("click", () => showPage("page-setup"));
 }
 
 function wireSetup() {
@@ -553,6 +657,9 @@ function wireSetup() {
   });
   el("#num-questions").addEventListener("input", refreshPoolCount);
   el("#start-exam-btn").addEventListener("click", startExam);
+  ["#timer-toggle", "#timer-minutes", "#shuffle-questions", "#shuffle-options"].forEach((sel) => {
+    el(sel).addEventListener("change", persistSettings);
+  });
 
   el("#file-input").addEventListener("change", (e) => {
     const file = e.target.files[0];
@@ -601,6 +708,7 @@ function wireInstructions() {
 
 export function initApp() {
   state.sets = loadUploadedSets();
+  applySavedSettings(loadSettings());
   wireNav();
   wireSetup();
   wireExam();
