@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SY0-701 Exam Simulator</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>CompTIA Security+ <span class="accent">SY0-701</span> Exam Simulator</h1>
+    <nav class="nav">
+      <button class="nav-btn active" data-page="page-setup">Setup</button>
+      <button class="nav-btn" data-page="page-instructions">Instructions &amp; Upload Format</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============================== SETUP PAGE ============================== -->
+    <section id="page-setup" class="page active">
+      <div class="grid">
+        <div class="col">
+          <div class="panel">
+            <h2>1. Question sets</h2>
+            <p class="hint">Enable one or more sets below to combine them into a single question pool. Upload new sets from the Instructions tab.</p>
+            <div id="sets-list"></div>
+          </div>
+
+          <div class="panel">
+            <h2>2. Domain &amp; objective filters</h2>
+            <p class="hint">
+              Check whole domains, or pick individual objectives. Use the range box to quickly select a span,
+              e.g. type <code>1.1-1.3</code> and click Apply to select only 1.1 through 1.3 (excluding 1.4).
+            </p>
+            <div class="quick-actions">
+              <button id="select-all-domains" class="btn-link">Select all</button>
+              <button id="select-no-domains" class="btn-link">Select none</button>
+              <button id="preset-standard-btn" class="btn-link">Standard full exam preset (90Q / 90min, official weighting)</button>
+            </div>
+            <div id="domain-filters"></div>
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="panel sticky">
+            <h2>3. Exam options</h2>
+            <div class="field-row">
+              <label for="num-questions">Number of questions</label>
+              <input type="number" id="num-questions" min="1" value="20" />
+            </div>
+            <div class="field-row">
+              <label for="timer-toggle">Timed exam</label>
+              <input type="checkbox" id="timer-toggle" checked />
+            </div>
+            <div class="field-row">
+              <label for="timer-minutes">Time limit (minutes)</label>
+              <input type="number" id="timer-minutes" min="1" value="90" />
+            </div>
+            <div class="field-row">
+              <label for="shuffle-questions">Shuffle question order</label>
+              <input type="checkbox" id="shuffle-questions" checked />
+            </div>
+            <div class="field-row">
+              <label for="shuffle-options">Shuffle answer order</label>
+              <input type="checkbox" id="shuffle-options" checked />
+            </div>
+
+            <p id="pool-warning" class="upload-error" style="display:none">
+              No questions match the current filters — enable a set or select at least one objective.
+            </p>
+            <p class="hint">Questions matching current filters: <strong id="pool-count">0</strong></p>
+
+            <button id="start-exam-btn" class="btn primary big">Start exam</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================== EXAM PAGE ============================== -->
+    <section id="page-exam" class="page">
+      <div class="exam-header">
+        <span id="exam-progress"></span>
+        <span id="exam-timer-wrap">⏱ <span id="exam-timer"></span></span>
+        <button id="quit-exam-btn" class="btn-link danger">Quit</button>
+      </div>
+
+      <div id="question-palette" class="palette"></div>
+
+      <div class="panel question-panel">
+        <div id="question-domain" class="obj-tag"></div>
+        <div id="question-text" class="question-text"></div>
+        <div id="options-box" class="options-box"></div>
+      </div>
+
+      <div class="exam-nav">
+        <button id="prev-btn" class="btn">◀ Previous</button>
+        <button id="mark-review-btn" class="btn">Mark for review</button>
+        <button id="next-btn" class="btn">Next ▶</button>
+        <button id="finish-btn" class="btn primary" style="display:none">Submit exam</button>
+      </div>
+    </section>
+
+    <!-- ============================== RESULTS PAGE ============================== -->
+    <section id="page-results" class="page">
+      <div class="panel">
+        <h2>Results</h2>
+        <div class="result-summary">
+          <div class="result-score" id="result-score"></div>
+          <div id="result-pass" class="badge-pass"></div>
+        </div>
+        <p id="result-scaled" class="hint"></p>
+
+        <h3>Domain breakdown</h3>
+        <div id="domain-breakdown" class="breakdown"></div>
+
+        <div class="review-controls">
+          <h3>Review</h3>
+          <label><input type="checkbox" id="review-filter-incorrect" /> Show only incorrect</label>
+          <button id="retake-missed-btn" class="btn">Retake missed questions</button>
+          <button class="btn" data-page="page-setup" onclick="document.getElementById('page-setup').scrollIntoView">Back to setup</button>
+        </div>
+        <div id="review-list" class="review-list"></div>
+      </div>
+    </section>
+
+    <!-- ============================== INSTRUCTIONS PAGE ============================== -->
+    <section id="page-instructions" class="page">
+      <div class="panel">
+        <h2>Upload a generated question set</h2>
+        <p class="hint">Choose a JSON file matching the format below. It will be validated before import; you can combine it with other sets on the Setup tab.</p>
+        <input type="file" id="file-input" accept="application/json,.json" />
+        <div id="upload-result" style="display:none"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Format &amp; LLM prompt</h2>
+        <p class="hint">Use the button below to copy the full format reference plus a ready-to-use prompt you can paste into an LLM (ChatGPT, Claude, etc.) to generate a compatible file.</p>
+        <div class="quick-actions">
+          <button id="copy-prompt-btn" class="btn primary">Copy full instructions + prompt</button>
+          <button id="download-example-btn" class="btn">Download example JSON</button>
+        </div>
+        <pre id="instructions-text" class="instructions-pre"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Educational, unofficial practice tool. Not affiliated with or endorsed by CompTIA. All bundled questions are original.</p>
+  </footer>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
