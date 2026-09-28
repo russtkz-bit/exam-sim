@@ -76,18 +76,112 @@ export function pickQuestions(pool, count, { shuffleQuestions = true } = {}) {
   return shuffleQuestions ? shuffle(picked) : picked;
 }
 
+// Adds per-type "display" ordering (the shuffled arrangement shown to the test-taker,
+// mapped back to original indices so answers stay comparable to the authored data).
 export function prepareSessionQuestions(questions, { shuffleOptions = true } = {}) {
   return questions.map((q) => {
-    if (!shuffleOptions) return { ...q, displayOptions: q.options.map((_, i) => i) };
-    const order = shuffle(q.options.map((_, i) => i));
-    return { ...q, displayOptions: order };
+    switch (q.type) {
+      case "matching": {
+        const displayTargets = shuffleOptions ? shuffle(q.targets.map((_, i) => i)) : q.targets.map((_, i) => i);
+        return { ...q, displayTargets };
+      }
+      case "ordering": {
+        let displayOrder = shuffle(q.items.map((_, i) => i));
+        if (q.items.length > 1 && displayOrder.every((v, i) => v === i)) {
+          [displayOrder[0], displayOrder[1]] = [displayOrder[1], displayOrder[0]];
+        }
+        return { ...q, displayOrder };
+      }
+      case "fill_blank":
+      case "hotspot":
+      case "simulation":
+        return { ...q };
+      default: {
+        // single / multiple choice
+        if (!shuffleOptions) return { ...q, displayOptions: q.options.map((_, i) => i) };
+        return { ...q, displayOptions: shuffle(q.options.map((_, i) => i)) };
+      }
+    }
   });
 }
 
-export function isCorrect(question, selectedIndices) {
-  const a = [...question.answer].sort().join(",");
-  const b = [...new Set(selectedIndices)].sort().join(",");
-  return a === b;
+// Returns a blank/default response shape for a question, used to seed a session's
+// answers before the test-taker interacts with it.
+export function blankResponse(question) {
+  switch (question.type) {
+    case "matching":
+      return question.prompts.map(() => null);
+    case "ordering":
+      return question.displayOrder ? [...question.displayOrder] : question.items.map((_, i) => i);
+    case "fill_blank":
+      return question.blanks.map(() => "");
+    case "simulation":
+      return question.rows.map(() => null);
+    case "hotspot":
+      return [];
+    default:
+      return [];
+  }
+}
+
+// Whether the test-taker has interacted with this question at all (used for the
+// question-palette "answered" indicator). Ordering always has *some* arrangement,
+// so it counts as answered as soon as a session starts, matching how a real PBQ
+// ships with a pre-filled default that must be actively corrected.
+export function hasAnyAnswer(question, response) {
+  if (response == null) return false;
+  switch (question.type) {
+    case "matching":
+      return response.some((v) => v !== null && v !== undefined);
+    case "fill_blank":
+      return response.some((v) => (v || "").trim().length > 0);
+    case "simulation":
+      return response.some((v) => v !== null && v !== undefined && v !== "");
+    case "ordering":
+      return true;
+    default:
+      return Array.isArray(response) && response.length > 0;
+  }
+}
+
+export function isCorrect(question, response) {
+  switch (question.type) {
+    case "matching": {
+      if (!Array.isArray(response) || response.length !== question.answer.length) return false;
+      return question.answer.every((correctIdx, i) => response[i] === correctIdx);
+    }
+    case "ordering": {
+      if (!Array.isArray(response) || response.length !== question.items.length) return false;
+      return response.every((origIdx, i) => origIdx === i);
+    }
+    case "fill_blank": {
+      if (!Array.isArray(response) || response.length !== question.blanks.length) return false;
+      return question.blanks.every((b, i) => {
+        const val = (response[i] || "").trim().toLowerCase();
+        return b.accepted.some((a) => a.trim().toLowerCase() === val);
+      });
+    }
+    case "hotspot": {
+      const a = [...question.answer].sort().join(",");
+      const b = [...new Set(response || [])].sort().join(",");
+      return a === b;
+    }
+    case "simulation": {
+      if (!Array.isArray(response) || response.length !== question.rows.length) return false;
+      return question.rows.every((row, i) => {
+        const val = response[i];
+        if (row.fieldType === "checkbox") return Boolean(val) === Boolean(row.answer);
+        if (row.fieldType === "text") return typeof val === "string" && val.trim().toLowerCase() === String(row.answer).trim().toLowerCase();
+        return val === row.answer;
+      });
+    }
+    default: {
+      // single / multiple choice
+      const a = [...question.answer].sort().join(",");
+      const b = [...new Set(response || [])].sort().join(",");
+      return a === b;
+    }
+  }
 }
 
 export function scoreSession(questions, answersById) {

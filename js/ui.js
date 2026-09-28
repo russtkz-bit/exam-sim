@@ -1,7 +1,7 @@
 import { DOMAINS, OBJECTIVE_INDEX, EXAM_INFO, allObjectiveIds } from "./data/objectives.js";
 import { SAMPLE_SET } from "./data/sampleQuestions.js";
 import { loadUploadedSets, addUploadedSet, removeUploadedSet, loadSettings, saveSettings } from "./storage.js";
-import { validateQuestionSet } from "./validation.js";
+import { validateQuestionSet, BLANK_TOKEN } from "./validation.js";
 import {
   buildPool,
   poolStatsByObjective,
@@ -9,6 +9,8 @@ import {
   pickQuestions,
   prepareSessionQuestions,
   scoreSession,
+  blankResponse,
+  hasAnyAnswer,
 } from "./examEngine.js";
 import { UPLOAD_FORMAT_DOC, UPLOAD_FORMAT_EXAMPLE } from "./promptTemplate.js";
 
@@ -407,40 +409,32 @@ function stopTimer() {
   if (state.session?.timerId) clearInterval(state.session.timerId);
 }
 
+const PBQ_TYPE_LABELS = {
+  single: "Multiple choice",
+  multiple: "Multiple choice (select all that apply)",
+  matching: "Performance-based: Matching",
+  ordering: "Performance-based: Ordering",
+  fill_blank: "Performance-based: Fill in the blank",
+  hotspot: "Performance-based: Hotspot",
+  simulation: "Performance-based: Simulation",
+};
+
 function renderExam() {
   const s = state.session;
   const q = s.questions[s.index];
+  if (!(q.id in s.answers)) s.answers[q.id] = blankResponse(q);
+
   el("#exam-progress").textContent = `Question ${s.index + 1} of ${s.questions.length}`;
   el("#exam-timer-wrap").style.display = s.timerEnabled ? "inline-block" : "none";
-  el("#question-domain").textContent = `${q.domain} — ${OBJECTIVE_INDEX[q.domain]?.title || ""}`;
-  el("#question-text").textContent = q.question;
+  el("#question-domain").textContent = `${q.domain} — ${OBJECTIVE_INDEX[q.domain]?.title || ""} · ${PBQ_TYPE_LABELS[q.type] || ""}`;
 
   const optionsBox = el("#options-box");
   optionsBox.innerHTML = "";
-  const inputType = q.type === "multiple" ? "checkbox" : "radio";
-  const selected = new Set(s.answers[q.id] || []);
+  el("#question-text").style.display = q.type === "fill_blank" ? "none" : "block";
+  el("#question-text").textContent = q.question;
 
-  q.displayOptions.forEach((origIdx) => {
-    const optionText = q.options[origIdx];
-    const id = `opt-${origIdx}`;
-    const row = ce("label", { class: "option-row" }, [
-      ce("input", {
-        type: inputType,
-        name: "option",
-        ...(selected.has(origIdx) ? { checked: "checked" } : {}),
-        onchange: (e) => {
-          let sel = new Set(s.answers[q.id] || []);
-          if (inputType === "radio") sel = new Set([origIdx]);
-          else if (e.target.checked) sel.add(origIdx);
-          else sel.delete(origIdx);
-          s.answers[q.id] = [...sel];
-          renderPalette();
-        },
-      }),
-      ce("span", {}, optionText),
-    ]);
-    optionsBox.appendChild(row);
-  });
+  const renderer = QUESTION_RENDERERS[q.type] || QUESTION_RENDERERS.choice;
+  renderer(q, s, optionsBox);
 
   el("#mark-review-btn").classList.toggle("active", s.marked.has(q.id));
   el("#prev-btn").disabled = s.index === 0;
@@ -450,12 +444,193 @@ function renderExam() {
   renderPalette();
 }
 
+function setAnswer(s, q, response) {
+  s.answers[q.id] = response;
+  renderPalette();
+}
+
+const QUESTION_RENDERERS = {
+  choice(q, s, box) {
+    const inputType = q.type === "multiple" ? "checkbox" : "radio";
+    const selected = new Set(s.answers[q.id] || []);
+    q.displayOptions.forEach((origIdx) => {
+      const row = ce("label", { class: "option-row" }, [
+        ce("input", {
+          type: inputType,
+          name: "option",
+          ...(selected.has(origIdx) ? { checked: "checked" } : {}),
+          onchange: (e) => {
+            let sel = new Set(s.answers[q.id] || []);
+            if (inputType === "radio") sel = new Set([origIdx]);
+            else if (e.target.checked) sel.add(origIdx);
+            else sel.delete(origIdx);
+            setAnswer(s, q, [...sel]);
+          },
+        }),
+        ce("span", {}, q.options[origIdx]),
+      ]);
+      box.appendChild(row);
+    });
+  },
+
+  matching(q, s, box) {
+    box.appendChild(ce("p", { class: "hint" }, "Assign each item on the left to the correct match on the right."));
+    const response = s.answers[q.id] || blankResponse(q);
+    q.prompts.forEach((promptText, promptIdx) => {
+      const select = ce("select", {
+        onchange: (e) => {
+          const val = e.target.value === "" ? null : Number(e.target.value);
+          const next = [...(s.answers[q.id] || blankResponse(q))];
+          next[promptIdx] = val;
+          setAnswer(s, q, next);
+        },
+      }, [ce("option", { value: "" }, "-- Select --")]);
+      q.displayTargets.forEach((origIdx) => {
+        const opt = ce("option", { value: String(origIdx) }, q.targets[origIdx]);
+        if (response[promptIdx] === origIdx) opt.setAttribute("selected", "selected");
+        select.appendChild(opt);
+      });
+      box.appendChild(ce("div", { class: "matching-row" }, [ce("span", { class: "matching-prompt" }, promptText), select]));
+    });
+  },
+
+  ordering(q, s, box) {
+    box.appendChild(ce("p", { class: "hint" }, "Use the arrows to arrange the steps in the correct order (top = first)."));
+    const order = s.answers[q.id] || blankResponse(q);
+    const list = ce("div", { class: "order-list" });
+    order.forEach((origIdx, pos) => {
+      const row = ce("div", { class: "order-item" }, [
+        ce("span", { class: "order-pos" }, String(pos + 1)),
+        ce("span", { class: "order-text" }, q.items[origIdx]),
+        ce("div", { class: "order-controls" }, [
+          ce("button", {
+            class: "btn-link",
+            type: "button",
+            ...(pos === 0 ? { disabled: "disabled" } : {}),
+            onclick: () => {
+              const next = [...order];
+              [next[pos - 1], next[pos]] = [next[pos], next[pos - 1]];
+              setAnswer(s, q, next);
+              renderExam();
+            },
+          }, "▲"),
+          ce("button", {
+            class: "btn-link",
+            type: "button",
+            ...(pos === order.length - 1 ? { disabled: "disabled" } : {}),
+            onclick: () => {
+              const next = [...order];
+              [next[pos], next[pos + 1]] = [next[pos + 1], next[pos]];
+              setAnswer(s, q, next);
+              renderExam();
+            },
+          }, "▼"),
+        ]),
+      ]);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+  },
+
+  fill_blank(q, s, box) {
+    const response = s.answers[q.id] || blankResponse(q);
+    const parts = q.question.split(BLANK_TOKEN);
+    const para = ce("p", { class: "fill-blank-text" });
+    parts.forEach((part, i) => {
+      if (part) para.appendChild(document.createTextNode(part));
+      if (i < parts.length - 1) {
+        para.appendChild(
+          ce("input", {
+            type: "text",
+            class: "blank-input",
+            value: response[i] || "",
+            oninput: (e) => {
+              const next = [...(s.answers[q.id] || blankResponse(q))];
+              next[i] = e.target.value;
+              s.answers[q.id] = next; // no full re-render needed while typing
+              renderPalette();
+            },
+          })
+        );
+      }
+    });
+    box.appendChild(para);
+  },
+
+  hotspot(q, s, box) {
+    box.appendChild(ce("p", { class: "hint" }, "Click the zone(s) that answer the question."));
+    const selected = new Set(s.answers[q.id] || []);
+    const canvas = ce("div", { class: "hotspot-canvas" });
+    q.zones.forEach((zone) => {
+      const isSelected = selected.has(zone.id);
+      const el2 = ce("button", {
+        type: "button",
+        class: `hotspot-zone ${isSelected ? "selected" : ""}`,
+        style: `left:${zone.x}%; top:${zone.y}%; width:${zone.w}%; height:${zone.h}%;`,
+        onclick: () => {
+          const sel = new Set(s.answers[q.id] || []);
+          if (sel.has(zone.id)) sel.delete(zone.id);
+          else sel.add(zone.id);
+          setAnswer(s, q, [...sel]);
+          renderExam();
+        },
+      }, zone.label);
+      canvas.appendChild(el2);
+    });
+    box.appendChild(canvas);
+  },
+
+  simulation(q, s, box) {
+    const response = s.answers[q.id] || blankResponse(q);
+    const table = ce("div", { class: "sim-table" });
+    q.rows.forEach((row, i) => {
+      let field;
+      if (row.fieldType === "select") {
+        field = ce("select", {
+          onchange: (e) => {
+            const next = [...(s.answers[q.id] || blankResponse(q))];
+            next[i] = e.target.value || null;
+            setAnswer(s, q, next);
+          },
+        }, [ce("option", { value: "" }, "-- Select --"), ...row.options.map((opt) => {
+          const o = ce("option", { value: opt }, opt);
+          if (response[i] === opt) o.setAttribute("selected", "selected");
+          return o;
+        })]);
+      } else if (row.fieldType === "checkbox") {
+        field = ce("input", {
+          type: "checkbox",
+          ...(response[i] ? { checked: "checked" } : {}),
+          onchange: (e) => {
+            const next = [...(s.answers[q.id] || blankResponse(q))];
+            next[i] = e.target.checked;
+            setAnswer(s, q, next);
+          },
+        });
+      } else {
+        field = ce("input", {
+          type: "text",
+          value: response[i] || "",
+          oninput: (e) => {
+            const next = [...(s.answers[q.id] || blankResponse(q))];
+            next[i] = e.target.value;
+            s.answers[q.id] = next;
+            renderPalette();
+          },
+        });
+      }
+      table.appendChild(ce("div", { class: "sim-row" }, [ce("span", { class: "sim-label" }, row.label), field]));
+    });
+    box.appendChild(table);
+  },
+};
+
 function renderPalette() {
   const s = state.session;
   const box = el("#question-palette");
   box.innerHTML = "";
   s.questions.forEach((q, i) => {
-    const answered = (s.answers[q.id] || []).length > 0;
+    const answered = hasAnyAnswer(q, s.answers[q.id]);
     const marked = s.marked.has(q.id);
     const btn = ce("button", {
       class: `palette-btn ${answered ? "answered" : ""} ${marked ? "marked" : ""} ${i === s.index ? "current" : ""}`,
@@ -471,7 +646,7 @@ function renderPalette() {
 function finishExam() {
   stopTimer();
   const s = state.session;
-  const unanswered = s.questions.filter((q) => !(s.answers[q.id] || []).length).length;
+  const unanswered = s.questions.filter((q) => !hasAnyAnswer(q, s.answers[q.id])).length;
   if (unanswered > 0 && s.endsAt && Date.now() < s.endsAt) {
     if (!confirm(`${unanswered} question(s) are unanswered. Submit anyway?`)) return;
   }
@@ -531,6 +706,50 @@ function timestampForFilename() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+// Human-readable answer summaries, used by both exports so PBQ types (matching,
+// ordering, fill_blank, hotspot, simulation) export as legibly as plain MCQ.
+function describeCorrectAnswer(q) {
+  switch (q.type) {
+    case "matching":
+      return q.prompts.map((p, i) => `${p} → ${q.targets[q.answer[i]]}`).join(" | ");
+    case "ordering":
+      return q.items.join(" → ");
+    case "fill_blank":
+      return q.blanks.map((b, i) => `Blank ${i + 1}: ${b.accepted[0]}`).join(" | ");
+    case "hotspot":
+      return q.answer.map((id) => q.zones.find((z) => z.id === id)?.label || id).join(" | ");
+    case "simulation":
+      return q.rows.map((r) => `${r.label}: ${r.fieldType === "checkbox" ? (r.answer ? "Checked" : "Unchecked") : r.answer}`).join(" | ");
+    default:
+      return q.answer.map((i) => q.options[i]).join(" | ");
+  }
+}
+
+function describeYourAnswer(q, selected) {
+  switch (q.type) {
+    case "matching":
+      return q.prompts.map((p, i) => `${p} → ${selected[i] != null ? q.targets[selected[i]] : "(no answer)"}`).join(" | ");
+    case "ordering": {
+      const order = selected && selected.length === q.items.length ? selected : q.items.map((_, i) => i);
+      return order.map((idx) => q.items[idx]).join(" → ");
+    }
+    case "fill_blank":
+      return q.blanks.map((b, i) => `Blank ${i + 1}: ${(selected[i] || "").trim() || "(blank)"}`).join(" | ");
+    case "hotspot":
+      return selected.length ? selected.map((id) => q.zones.find((z) => z.id === id)?.label || id).join(" | ") : "(no answer)";
+    case "simulation":
+      return q.rows
+        .map((r, i) => {
+          const val = selected[i];
+          if (r.fieldType === "checkbox") return `${r.label}: ${val ? "Checked" : "Unchecked"}`;
+          return `${r.label}: ${val || "(no answer)"}`;
+        })
+        .join(" | ");
+    default:
+      return selected.length ? selected.map((i) => q.options[i]).join(" | ") : "(no answer)";
+  }
+}
+
 function exportResultsJSON(result) {
   const payload = {
     examVersion: "SY0-701",
@@ -547,10 +766,12 @@ function exportResultsJSON(result) {
     questions: result.details.map((d) => ({
       id: d.question.id,
       domain: d.question.domain,
+      type: d.question.type,
       question: d.question.question,
-      options: d.question.options,
-      correctAnswerIndices: d.question.answer,
-      yourAnswerIndices: d.selected,
+      correctAnswer: describeCorrectAnswer(d.question),
+      yourAnswer: describeYourAnswer(d.question, d.selected),
+      rawCorrectAnswer: d.question.answer ?? null,
+      rawYourAnswer: d.selected,
       correct: d.correct,
       explanation: d.question.explanation || "",
     })),
@@ -564,17 +785,17 @@ function csvEscape(value) {
 }
 
 function exportResultsCSV(result) {
-  const header = ["id", "domain", "objective", "question", "options", "correct_answer", "your_answer", "result", "explanation"];
+  const header = ["id", "domain", "objective", "type", "question", "correct_answer", "your_answer", "result", "explanation"];
   const rows = result.details.map((d) => {
     const q = d.question;
     return [
       q.id,
       q.domain,
       OBJECTIVE_INDEX[q.domain]?.title || "",
-      q.question,
-      q.options.map((o, i) => `${i}: ${o}`).join(" | "),
-      q.answer.map((i) => q.options[i]).join(" | "),
-      d.selected.length ? d.selected.map((i) => q.options[i]).join(" | ") : "(no answer)",
+      PBQ_TYPE_LABELS[q.type] || q.type,
+      q.question.replaceAll(BLANK_TOKEN, "____"),
+      describeCorrectAnswer(q),
+      describeYourAnswer(q, d.selected),
       d.correct ? "correct" : "incorrect",
       q.explanation || "",
     ];
@@ -584,31 +805,113 @@ function exportResultsCSV(result) {
   downloadFile(`sy0-701-results-${timestampForFilename()}.csv`, csv, "text/csv");
 }
 
+const REVIEW_BODY_RENDERERS = {
+  choice(q, selected) {
+    const optList = ce("ul", { class: "review-options" });
+    q.options.forEach((optText, idx) => {
+      const isCorrectOpt = q.answer.includes(idx);
+      const wasSelected = selected.includes(idx);
+      let cls = "";
+      if (isCorrectOpt) cls = "opt-correct";
+      if (wasSelected && !isCorrectOpt) cls = "opt-wrong-selected";
+      optList.appendChild(ce("li", { class: cls }, `${wasSelected ? "☑" : "☐"} ${optText}${isCorrectOpt ? " (correct)" : ""}`));
+    });
+    return optList;
+  },
+
+  matching(q, selected) {
+    const list = ce("ul", { class: "review-options" });
+    q.prompts.forEach((promptText, i) => {
+      const correctTarget = q.targets[q.answer[i]];
+      const yourTarget = selected[i] != null ? q.targets[selected[i]] : "(no answer)";
+      const ok = selected[i] === q.answer[i];
+      list.appendChild(
+        ce("li", { class: ok ? "opt-correct" : "opt-wrong-selected" }, `${promptText} → your answer: ${yourTarget}${ok ? "" : ` (correct: ${correctTarget})`}`)
+      );
+    });
+    return list;
+  },
+
+  ordering(q, selected) {
+    const list = ce("ol", { class: "review-options" });
+    const order = selected && selected.length === q.items.length ? selected : q.items.map((_, i) => i);
+    order.forEach((origIdx, pos) => {
+      const ok = origIdx === pos;
+      list.appendChild(ce("li", { class: ok ? "opt-correct" : "opt-wrong-selected" }, q.items[origIdx]));
+    });
+    if (!order.every((v, i) => v === i)) {
+      const correctList = ce("ol", { class: "review-options" });
+      q.items.forEach((text) => correctList.appendChild(ce("li", { class: "opt-correct" }, text)));
+      return ce("div", {}, [ce("p", { class: "hint" }, "Your order:"), list, ce("p", { class: "hint" }, "Correct order:"), correctList]);
+    }
+    return list;
+  },
+
+  fill_blank(q, selected) {
+    const list = ce("ul", { class: "review-options" });
+    q.blanks.forEach((b, i) => {
+      const val = (selected[i] || "").trim();
+      const ok = b.accepted.some((a) => a.trim().toLowerCase() === val.toLowerCase());
+      list.appendChild(
+        ce("li", { class: ok ? "opt-correct" : "opt-wrong-selected" }, `Blank ${i + 1}: "${val || "(blank)"}" ${ok ? "" : `(accepted: ${b.accepted.join(", ")})`}`)
+      );
+    });
+    return list;
+  },
+
+  hotspot(q, selected) {
+    const list = ce("ul", { class: "review-options" });
+    q.zones.forEach((zone) => {
+      const isCorrectZone = q.answer.includes(zone.id);
+      const wasSelected = (selected || []).includes(zone.id);
+      let cls = "";
+      if (isCorrectZone) cls = "opt-correct";
+      if (wasSelected && !isCorrectZone) cls = "opt-wrong-selected";
+      list.appendChild(ce("li", { class: cls }, `${wasSelected ? "☑" : "☐"} ${zone.label}${isCorrectZone ? " (correct)" : ""}`));
+    });
+    return list;
+  },
+
+  simulation(q, selected) {
+    const list = ce("ul", { class: "review-options" });
+    q.rows.forEach((row, i) => {
+      const val = selected[i];
+      let ok, yourText, correctText;
+      if (row.fieldType === "checkbox") {
+        ok = Boolean(val) === Boolean(row.answer);
+        yourText = val ? "Checked" : "Unchecked";
+        correctText = row.answer ? "Checked" : "Unchecked";
+      } else if (row.fieldType === "text") {
+        ok = typeof val === "string" && val.trim().toLowerCase() === String(row.answer).trim().toLowerCase();
+        yourText = val || "(blank)";
+        correctText = row.answer;
+      } else {
+        ok = val === row.answer;
+        yourText = val || "(no answer)";
+        correctText = row.answer;
+      }
+      list.appendChild(ce("li", { class: ok ? "opt-correct" : "opt-wrong-selected" }, `${row.label}: ${yourText}${ok ? "" : ` (correct: ${correctText})`}`));
+    });
+    return list;
+  },
+};
+
 function renderReviewDetails(result, onlyIncorrect) {
   const reviewBox = el("#review-list");
   reviewBox.innerHTML = "";
   result.details
     .filter((d) => !onlyIncorrect || !d.correct)
-    .forEach((d, i) => {
+    .forEach((d) => {
       const q = d.question;
       const item = ce("div", { class: `review-item ${d.correct ? "correct" : "incorrect"}` });
       item.appendChild(ce("div", { class: "review-head" }, [
         ce("span", { class: "obj-code" }, q.domain),
+        ce("span", {}, PBQ_TYPE_LABELS[q.type] || ""),
         ce("span", {}, d.correct ? "✓ Correct" : "✗ Incorrect"),
       ]));
-      item.appendChild(ce("div", { class: "review-question" }, q.question));
-      const optList = ce("ul", { class: "review-options" });
-      q.options.forEach((optText, idx) => {
-        const isCorrectOpt = q.answer.includes(idx);
-        const wasSelected = d.selected.includes(idx);
-        let cls = "";
-        if (isCorrectOpt) cls = "opt-correct";
-        if (wasSelected && !isCorrectOpt) cls = "opt-wrong-selected";
-        optList.appendChild(
-          ce("li", { class: cls }, `${wasSelected ? "☑" : "☐"} ${optText}${isCorrectOpt ? " (correct)" : ""}`)
-        );
-      });
-      item.appendChild(optList);
+      item.appendChild(ce("div", { class: "review-question" }, q.question.replaceAll(BLANK_TOKEN, "____")));
+      const renderBody = REVIEW_BODY_RENDERERS[q.type] || REVIEW_BODY_RENDERERS.choice;
+      item.appendChild(renderBody(q, d.selected));
       if (q.explanation) item.appendChild(ce("div", { class: "review-explanation" }, q.explanation));
       reviewBox.appendChild(item);
     });

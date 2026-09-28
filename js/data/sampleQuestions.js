@@ -330,5 +330,55 @@ export const SAMPLE_SET = {
       options: ["Security awareness training", "Vulnerability scanning", "Third-party risk assessment", "Change advisory board review"],
       answer: [0],
       explanation: "Structured onboarding/awareness training builds baseline security behavior across the workforce." },
+
+    // ---------------- Performance-based question (PBQ) samples, one per type ----------------
+    { id: "s64", domain: "1.1", type: "matching",
+      question: "Match each real-world example to the security control TYPE it best represents.",
+      prompts: [
+        "A fence and locked gate around the building perimeter",
+        "A written acceptable-use policy signed by every employee",
+        "An intrusion detection system (IDS) that inspects network traffic",
+        "A mandatory annual security awareness training class",
+      ],
+      targets: ["Physical", "Managerial", "Technical", "Operational", "Compensating"],
+      answer: [0, 1, 2, 3],
+      explanation: "Physical = tangible barriers; Managerial = policy/governance; Technical = enforced by systems/software; Operational = day-to-day human processes like training." },
+
+    { id: "s65", domain: "4.8", type: "ordering",
+      question: "Arrange the incident response lifecycle phases in the correct order.",
+      items: [
+        "Preparation",
+        "Detection and analysis",
+        "Containment",
+        "Eradication",
+        "Recovery",
+        "Post-incident activity (lessons learned)",
+      ],
+      explanation: "The standard IR lifecycle moves from getting ready, to spotting and scoping an incident, limiting its spread, removing the cause, restoring service, and finally reviewing what happened." },
+
+    { id: "s66", domain: "1.2", type: "fill_blank",
+      question: "The three pillars of the CIA triad are Confidentiality, ____, and Availability.",
+      blanks: [{ accepted: ["Integrity"] }],
+      explanation: "Integrity ensures data has not been altered by an unauthorized party." },
+
+    { id: "s67", domain: "3.2", type: "hotspot",
+      question: "A company is deploying a new public-facing web server. Click the zone where it should be placed to keep it segmented from the trusted internal network, per best practice.",
+      zones: [
+        { id: "z_internal", label: "Internal LAN (trusted)", x: 4, y: 25, w: 27, h: 50 },
+        { id: "z_dmz", label: "DMZ", x: 36.5, y: 25, w: 27, h: 50 },
+        { id: "z_internet", label: "Internet (untrusted)", x: 69, y: 25, w: 27, h: 50 },
+      ],
+      answer: ["z_dmz"],
+      explanation: "The DMZ isolates internet-facing services from the trusted internal LAN while still allowing controlled access from the internet." },
+
+    { id: "s68", domain: "3.2", type: "simulation",
+      question: "Configure the following inbound firewall rules to implement a default-deny policy that allows only HTTPS (443) traffic from the internet.",
+      rows: [
+        { label: "TCP 443 (HTTPS) inbound from any", fieldType: "select", options: ["Allow", "Deny"], answer: "Allow" },
+        { label: "TCP 80 (HTTP, unencrypted) inbound from any", fieldType: "select", options: ["Allow", "Deny"], answer: "Deny" },
+        { label: "TCP 23 (Telnet) inbound from any", fieldType: "select", options: ["Allow", "Deny"], answer: "Deny" },
+        { label: "TCP 3389 (RDP) inbound from any", fieldType: "select", options: ["Allow", "Deny"], answer: "Deny" },
+      ],
+      explanation: "A default-deny posture only opens the single required, encrypted service (443) and blocks everything else, including legacy/unencrypted and remote-admin protocols from the open internet." },
   ],
 };

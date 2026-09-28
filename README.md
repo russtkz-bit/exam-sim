@@ -21,6 +21,13 @@ modules, served as static files.
   preset (90 questions / 90 minutes, official domain weighting), a question
   palette (jump/mark for review), per-domain score breakdown, and a
   "retake missed questions" flow.
+- Performance-based questions (PBQs), not just multiple choice: matching,
+  ordering/sequencing, fill-in-the-blank, hotspot (click the correct zone of
+  an abstract diagram), and simulation (configure a table of settings, e.g.
+  firewall rules) — see `js/promptTemplate.js` / the Instructions tab for the
+  schema of each type.
+- Setup filters and exam options persist in `localStorage` across reloads,
+  and results can be exported as JSON or CSV.
 
 ## Running locally
 
@@ -64,7 +71,10 @@ short, a set is:
 }
 ```
 
-`domain` must be one of the 28 official objective codes (`1.1`–`5.6`).
+`type` also supports five PBQ formats — `matching`, `ordering`, `fill_blank`,
+`hotspot`, and `simulation` — each with its own fields (documented in full in
+the app's Instructions tab). `domain` must be one of the 28 official
+objective codes (`1.1`–`5.6`).
 Uploaded sets are validated on import and stored in the browser's
 `localStorage`, so they persist across reloads on the same device/browser
 but are not shared between devices.
